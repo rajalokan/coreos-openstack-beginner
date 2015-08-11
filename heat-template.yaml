@@ -1,0 +1,314 @@
+heat_template_version: 2013-05-23
+
+
+description: HOT file for single node CoreOS cluster - control node
+
+parameters:
+    flavor:
+        type: string
+        default: m1.medium
+        description: Flavor to use for CoreOS nodes
+    image:
+        type: string
+        default: CoreOS-alpha
+        description: Base image for CoreOS
+    key_name:
+        type: string
+        default: alok
+        description: SSH public key name (change this when deploying multiple clusters)
+        constraints:
+            - custom_constraint: nova.keypair
+              description: Must name a public key(pair) known to Nova
+    internal_network_name:
+        type: string
+        description: The name of the internal network
+        default: coreos-internalnet
+    internal_subnet_name:
+        type: string
+        description: Name of internal subnet
+        default: coreos-internalsubnet
+    internal_network_cidr:
+        type: string
+        description: The CIDR of the internal network
+        default: 192.168.222.0/24
+    internal_gw_name:
+        type: string
+        description: The name of the internal network router
+        default: coreos-internalrouter
+    internal_dns_primary:
+        type: string
+        description: Primary DNS for internal network
+        default: 8.8.8.8
+    internal_dns_secondary:
+        type: string
+        description: Secondary DNS for internal network
+        default: 8.8.4.4
+    public_network_uuid:
+        type: string
+        description: The UUID of the public network
+        default: 87cb4819-182e-4f2d-86d2-6970c11962da
+    discovery_token_url:
+        type: string
+        description: Output of curl -q https://discovery.etcd.io/new?size=3
+
+
+resources:
+
+    internal_net:
+        type: OS::Neutron::Net
+        properties:
+            name: { get_param: internal_network_name }
+
+    internal_subnet:
+        type: OS::Neutron::Subnet
+        properties:
+            network_id: { get_resource: internal_net }
+            cidr: { get_param: internal_network_cidr }
+            name: { get_param: internal_subnet_name }
+            dns_nameservers: [ { get_param: internal_dns_primary }, { get_param: internal_dns_secondary } ]
+
+    internal_router:
+        type: OS::Neutron::Router
+        properties:
+            name: { get_param: internal_gw_name }
+
+    internal_router_extgw:
+        type: OS::Neutron::RouterGateway
+        properties:
+            network_id: { get_param: public_network_uuid }
+            router_id: { get_resource: internal_router }
+
+    internal_router_interface:
+        type: OS::Neutron::RouterInterface
+        properties:
+            router_id: { get_resource: internal_router }
+            subnet_id: { get_resource: internal_subnet }
+
+    coreos_secgroup:
+        type: OS::Neutron::SecurityGroup
+        properties:
+            name: coreos-secgroup
+            description: Coreos security group to allow all out and SSH in
+            rules: [ {
+                "direction": egress,
+                "remote_ip_prefix": 0.0.0.0/0,
+                "port_range_min": 1,
+                "port_range_max": 65535,
+                "ethertype": IPv4,
+                "protocol": tcp
+            },
+            {
+                "direction": egress,
+                "remote_ip_prefix": 0.0.0.0/0,
+                "port_range_min": 1,
+                "port_range_max": 65535,
+                "ethertype": IPv4,
+                "protocol": udp
+            },
+            {
+                "direction": ingress,
+                "remote_ip_prefix": 0.0.0.0/0,
+                "port_range_min": 22,
+                "port_range_max": 22,
+                "ethertype": IPv4,
+                "protocol": tcp
+            },
+            {
+                "direction": ingress,
+                "remote_ip_prefix": { get_param: internal_network_cidr },
+                "port_range_min": 1,
+                "port_range_max": 65535,
+                "ethertype": IPv4,
+                "protocol": tcp
+            }]
+
+ 
+# coreos-control
+# --------------
+    coreos_control_internal_port:
+        type: OS::Neutron::Port
+        properties:
+            network_id: { get_resource: internal_net }
+            fixed_ips:
+                - subnet_id: { get_resource: internal_subnet }
+            security_groups:
+                - { get_resource: coreos_secgroup } 
+
+    coreos_control_floatingip:
+        type: OS::Neutron::FloatingIP
+        properties:
+            floating_network_id: { get_param: public_network_uuid }
+
+    coreos-control_floatingip_ass:
+        type: OS::Neutron::FloatingIPAssociation
+        properties:
+            floatingip_id: { get_resource: coreos_control_floatingip }
+            port_id: { get_resource: coreos_control_internal_port }
+        depends_on:
+            - internal_router_interface
+            - internal_router_extgw
+            - coreos_control_internal_port
+
+    coreos_control:
+        type: OS::Nova::Server
+        depends_on: [ coreos_control_internal_port ] 
+        properties:
+            name: coreos_control
+            image: { get_param: image }
+            flavor: { get_param: flavor }
+            key_name: { get_param: key_name }
+            networks:
+                - port: { get_resource: coreos_control_internal_port }
+            user_data_format: RAW
+            user_data: 
+                str_replace:
+                    template: |
+                        #cloud-config
+                        coreos:
+                            fleet:
+                                etcd_servers: http://127.0.0.1:2379
+                                metadata: role=control
+                            etcd2:
+                                name: etcd2
+                                discovery: $token_url
+                                advertise-client-urls: http://$public_ipv4:2379
+                                initial-advertise-peer-urls: http://$public_ipv4:2380
+                                listen-client-urls: http://0.0.0.0:2379
+                                listen-peer-urls: http://0.0.0.0:2380
+                            units:
+                                - name: etcd2.service
+                                  command: start
+                                - name: fleet.service
+                                  command: start
+                            update:
+                                group: alpha
+                                reboot-strategy: reboot
+                    params:
+                        $public_ipv4: { get_attr: [ coreos_control_floatingip, floating_ip_address ] }
+                        $token_url: { get_param: discovery_token_url }
+
+# coreos-worker01
+# --------------
+    coreos_worker01_internal_port:
+        type: OS::Neutron::Port
+        properties:
+            network_id: { get_resource: internal_net }
+            fixed_ips:
+                - subnet_id: { get_resource: internal_subnet }
+            security_groups:
+                - { get_resource: coreos_secgroup } 
+
+    coreos_worker01_floatingip:
+        type: OS::Neutron::FloatingIP
+        properties:
+            floating_network_id: { get_param: public_network_uuid }
+
+    coreos-worker01_floatingip_ass:
+        type: OS::Neutron::FloatingIPAssociation
+        properties:
+            floatingip_id: { get_resource: coreos_worker01_floatingip }
+            port_id: { get_resource: coreos_worker01_internal_port }
+        depends_on:
+            - internal_router_interface
+            - internal_router_extgw
+            - coreos_worker01_internal_port
+
+    coreos_worker01:
+        type: OS::Nova::Server
+        depends_on: [ coreos_worker01_internal_port ] 
+        properties:
+            name: coreos_worker01
+            image: { get_param: image }
+            flavor: { get_param: flavor }
+            key_name: { get_param: key_name }
+            networks:
+                - port: { get_resource: coreos_worker01_internal_port }
+            user_data_format: RAW
+            user_data: 
+                str_replace:
+                    template: |
+                        #cloud-config
+
+                        coreos:
+                            fleet:
+                                etcd_servers: http://$control_ipv4:2379
+                                metadata: role=node
+                            units:
+                                - name: etcd2.service
+                                  mask: true
+                                - name: fleet.service
+                                  command: start
+                            update:
+                                group: alpha
+                                reboot-strategy: reboot
+                    params:
+                        $control_ipv4: { get_attr: [ coreos_control_floatingip, floating_ip_address ] }
+
+# coreos-worker02
+# --------------
+    coreos_worker02_internal_port:
+        type: OS::Neutron::Port
+        properties:
+            network_id: { get_resource: internal_net }
+            fixed_ips:
+                - subnet_id: { get_resource: internal_subnet }
+            security_groups:
+                - { get_resource: coreos_secgroup } 
+
+    coreos_worker02_floatingip:
+        type: OS::Neutron::FloatingIP
+        properties:
+            floating_network_id: { get_param: public_network_uuid }
+
+    coreos-worker02_floatingip_ass:
+        type: OS::Neutron::FloatingIPAssociation
+        properties:
+            floatingip_id: { get_resource: coreos_worker02_floatingip }
+            port_id: { get_resource: coreos_worker02_internal_port }
+        depends_on:
+            - internal_router_interface
+            - internal_router_extgw
+            - coreos_worker02_internal_port
+
+    coreos_worker02:
+        type: OS::Nova::Server
+        depends_on: [ coreos_worker02_internal_port ] 
+        properties:
+            name: coreos_worker02
+            image: { get_param: image }
+            flavor: { get_param: flavor }
+            key_name: { get_param: key_name }
+            networks:
+                - port: { get_resource: coreos_worker02_internal_port }
+            user_data_format: RAW
+            user_data: 
+                str_replace:
+                    template: |
+                        #cloud-config
+
+                        coreos:
+                            fleet:
+                                etcd_servers: http://$control_ipv4:2379
+                                metadata: role=node
+                            units:
+                                - name: etcd2.service
+                                  mask: true
+                                - name: fleet.service
+                                  command: start
+                            update:
+                                group: alpha
+                                reboot-strategy: reboot
+                    params:
+                        $control_ipv4: { get_attr: [ coreos_control_floatingip, floating_ip_address ] }
+
+outputs:
+    control_ip:
+        description: fixed ip assigned to the control node
+        value: { get_attr: [ coreos_control_floatingip, floating_ip_address ] } 
+    worker01_ip:
+        description: fixed ip assigned to worker01
+        value: { getattr: [ coreos_worker01_floatingip, floating_ip_address ] }
+    worker02_ip:
+        description: fixed ip assigned to worker02
+        value: { getattr: [ coreos_worker02_floatingip, floating_ip_address ] }
+

@@ -1,0 +1,3 @@
+export ETCDCTL_PEERS="http://108.182.62.205:2379"
+#/usr/bin/ssh-add $HOME/.vagrant.d/insecure_private_key
+export FLEETCTL_TUNNEL="108.182.62.205"
