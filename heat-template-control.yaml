@@ -14,15 +14,11 @@ parameters:
         description: Base image for CoreOS
     key_name:
         type: string
-        default: coreos_key
+        default: alok
         description: SSH public key name (change this when deploying multiple clusters)
         constraints:
             - custom_constraint: nova.keypair
               description: Must name a public key(pair) known to Nova
-    key_content:
-        type: string
-        default: ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCgz8jH7jdg+nzJI/mwAYV/dtor4vKRxg/RZOhHPpTB7+a7eJIXichmJ8ufc0CIHfky+nGOEwkcZtjVy2P7+1VkkEBv5bG7ykiF1jVQGy7+KMRqhUGRD9JGH3D8+JS+PxgDTjME12T61s3htwQVeC8+tNVOwLTiI4S1WVpXxMC1INNIOU/RkNJ/qMQCItrc+ckmbcU59elmcdhoMJ7Mup++Sjmilj5o0fV5ii3kjvin5Gz8Qid5nc6fOGt7kNibfS/l9GB/SnCuC5DjCrA1Bk+8TPl0nitxalG1Vs7gvKNq9VLloAHXfXrg+PsWRQRSKABrUEBLGhg1WREWyVLY19jz Please change this
-        description: SSH public key content
     internal_network_name:
         type: string
         description: The name of the internal network
@@ -126,13 +122,6 @@ resources:
                 "protocol": tcp
             }]
 
-    coreos_key:
-        type: OS::Nova::KeyPair
-        properties:
-            name: { get_param: key_name }
-            public_key: { get_param: key_contents }
-            save_private_key: false
- 
 # coreos-control
 # --------------
     coreos_control_internal_port:

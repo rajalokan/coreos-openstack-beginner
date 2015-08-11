@@ -5,14 +5,15 @@ This contains my experiences while learning CoreOS on an OpenStack infrastructur
 Follow these commands:
 
 ```
-alok@remote $ heat stack-create -f heat-template.yaml -P discovery_token_url=`curl -q https://discovery.etcd.io/new?size=3` trycoreos
+alok@remote $ heat stack-create -f heat-template.yaml -P discovery_token_url=`curl -q https://discovery.etcd.io/new?size=3` -P public_network_uuid=87cb4819-33d4-4f2d-86d2-6970c11962da -P key_name=myoskey trycoreos
 ```
 
 This provides a three machine cluster. Find ip address of control node using 
 `heat output-show trycoreos control_ip`. Lets say it is `108.182.62.205`.
 
 ```
-alok@remote $ FLEETCTL_TUNNEL="108.182.62.205" fleetctl list-machines
+alok@remote $ export FLEETCTL_TUNNEL="108.182.62.205"
+alok@remote $ fleetctl list-machines
 ```
 
 ```
